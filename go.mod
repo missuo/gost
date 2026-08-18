@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/go-gost/core v0.6.0
-	github.com/go-gost/x v0.15.2
+	github.com/go-gost/x v0.15.3
 	github.com/judwhite/go-svc v1.2.1
 	github.com/moby/moby/client v0.4.0
 	github.com/stretchr/testify v1.11.1
@@ -181,6 +181,6 @@ require (
 	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 )
 
-replace github.com/go-gost/x => github.com/missuo/x v0.15.3-0.20260813030923-d18ea6c01ce5
-
 replace github.com/quic-go/quic-go => github.com/missuo/quic-go v0.60.1-0.20260813030401-46c44a85ddb3
+
+replace github.com/go-gost/x => github.com/missuo/x v0.15.4-0.20260818073154-8654f8b1a09d
