@@ -1,64 +1,105 @@
-# ref: https://docs.docker.com/ci-cd/github-actions/
-# https://blog.oddbit.com/post/2020-09-25-building-multi-architecture-im/
-
-name: docker
+name: Build
 
 on:
   push:
     branches:
-    - master
-    tags:
-    - 'v*'
+      - master
+  workflow_dispatch:
+    inputs:
+      gost_ref:
+        description: "gost 分支 / tag / commit"
+        required: false
+        default: "feat/pluggable-cc"
+
+env:
+  GOST_REPO: https://github.com/missuo/gost.git
+  GOST_REF: ${{ github.event.inputs.gost_ref || 'feat/pluggable-cc' }}
 
 permissions:
-  contents: read
-
-# New pushes cancel an in-progress build for the same ref. Tags are isolated
-# by ref, so re-pushing a release tag only de-dupes itself, never another tag.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
+  prepare:
+    name: Resolve gost version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Clone gost source
+        run: |
+          git clone -b "${GOST_REF}" "${GOST_REPO}" gost
+
+      # 用源码里最近的 tag 作为编译出来的版本号,例如 3.2.6
+      - name: Resolve version
+        id: version
+        working-directory: gost
+        run: |
+          RAW=$(git describe --tags --abbrev=0)
+          VERSION="${RAW#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved gost version: ${VERSION}"
+
   build:
+    name: build (linux/${{ matrix.goarch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      # 拉取并编译
+      - name: Clone gost source
+        run: |
+          git clone -b "${GOST_REF}" --depth 1 "${GOST_REPO}" gost
+
+      - name: Build gost
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          cd gost/cmd/gost
+          go build -trimpath -ldflags "-s -w" -o gost
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+          cp gost "${GITHUB_WORKSPACE}/dist/"
+
+      - name: Package artifact
+        working-directory: dist
+        run: |
+          NAME="gost_${{ needs.prepare.outputs.version }}_linux_${{ matrix.goarch }}"
+          tar -czf "${NAME}.tar.gz" gost
+          rm -f gost
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gost_${{ needs.prepare.outputs.version }}_linux_${{ matrix.goarch }}
+          path: dist/*
+
+  release:
+    name: Release
+    needs: [prepare, build]
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
-    # Auto-generates image tags, replacing the former hand-rolled shell:
-    #   - master push                         -> :latest
-    #   - clean release tag vX.Y.Z             -> :X.Y.Z :X :X.Y :latest
-    #   - nightly tag vX.Y.Z-nightly.<date>    -> :X.Y.Z-nightly.<date>   (no major/minor/latest)
-    - name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ secrets.DOCKER_IMAGE }}
-        flavor: latest=false
-        tags: |
-          type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) }}
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}},enable=${{ !contains(github.ref_name, '-') }}
-          type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
-
-    - name: Set up Docker Buildx
-      id: buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Login to DockerHub
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-
-    - name: Buildx and push
-      uses: docker/build-push-action@v6
-      with:
-        platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64/v8,linux/s390x,linux/riscv64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        # Reuse build layers across runs via the GitHub Actions cache.
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: v${{ needs.prepare.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
