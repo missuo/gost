@@ -172,3 +172,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20250523182742-eede7a881b20 // indirect
 )
+
+replace github.com/quic-go/quic-go => github.com/apernet/quic-go v0.63.1-0.20261004002722-3e251ad70ec5
+
+replace github.com/go-gost/x => github.com/missuo/x v0.15.4-0.20261106103426-79a4e3bcac6c
